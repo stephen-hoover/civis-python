@@ -2,10 +2,8 @@ from concurrent import futures
 import time
 
 from civis.base import CivisJobFailure, CivisAsyncResultBase, FAILED, DONE
+from civis.base import _DEFAULT_POLLING_INTERVAL
 from civis.response import Response
-
-
-_DEFAULT_POLLING_INTERVAL = 15
 
 
 class PollableResult(CivisAsyncResultBase):
