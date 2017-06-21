@@ -671,10 +671,21 @@ def _import_bytes(buf, database, table, client, max_errors,
                   existing_table_rows=existing_table_rows, distkey=distkey,
                   sortkey1=sortkey1, sortkey2=sortkey2,
                   column_delimiter=delimiter, first_row_is_header=headers,
-                  hidden=hidden)
+                  multipart=True, hidden=hidden)
+
+    from requests_toolbelt.multipart.encoder import MultipartEncoder
+    from collections import OrderedDict
 
     import_job = client.imports.post_files(**kwargs)
-    put_response = requests.put(import_job.upload_uri, buf)
+    form = import_job.upload_fields
+    form_key = OrderedDict(key=form.pop('key'))
+    form_key.update(form)
+    form_key['file'] = buf
+
+    en = MultipartEncoder(fields=form_key)
+    put_response = requests.post(import_job.upload_uri, data=en,
+                                 headers={'Content-Type': en.content_type})
+    #put_response = requests.put(import_job.upload_uri, buf)
 
     put_response.raise_for_status()
     run_job_result = client._session.post(import_job.run_uri)
