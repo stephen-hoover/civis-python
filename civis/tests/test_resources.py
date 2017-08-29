@@ -42,20 +42,6 @@ updated_at : string/time
     The last modification time for this credential.""")  # noqa: E122
 
 
-def test_create_method_iterator_kwarg():
-    args = [{"name": 'limit', "in": 'query', "required": False, "doc": ""},
-            {"name": 'page_num', "in": 'query', "required": False, "doc": ""},
-            {"name": 'order', "in": 'query', "required": False, "doc": ""},
-            {"name": 'order_by', "in": 'query', "required": False, "doc": ""}]
-    method = _resources.create_method(args, 'get', 'mock_name', '/objects',
-                                      'fake_doc')
-    mock_endpoint = mock.MagicMock()
-
-    method(mock_endpoint, iterator=True)
-    mock_endpoint._call_api.assert_called_once_with(
-        'get', '/objects', {}, {}, iterator=True)
-
-
 def test_create_method_no_iterator_kwarg():
 
     # Test that dynamically-created function errors when an
@@ -244,12 +230,7 @@ def test_create_method_unexpected_kwargs():
         'get', '/objects', {"foo": 0, "bar": 0}, {}, iterator=False)
 
     # Method raises TypeError with unexpected kwarg
-    if six.PY3:
-        expected_msg = ("mock_name() got an unexpected keyword argument(s) "
-                        "{'baz'}")
-    else:
-        expected_msg = ("mock_name() got an unexpected keyword argument(s) "
-                        "set(['baz'])")
+    expected_msg = "got an unexpected keyword argument 'baz'"
     with pytest.raises(TypeError) as excinfo:
         method(mock_endpoint, foo=0, bar=0, baz=0)
     assert str(excinfo.value) == expected_msg
