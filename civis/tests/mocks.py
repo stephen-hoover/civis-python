@@ -68,12 +68,28 @@ def _list_iterator(res):
         yield v
 
 
-def create_client_mock(cache=CACHED_SPEC_PATH, reset=False, setup=True):
+def create_client_mock(api_key=None, return_type='snake',
+                       retry_total=6, api_version="1.0", resources="base",
+                       local_api_spec=CACHED_SPEC_PATH,
+                       reset=False, setup=True):
     """Create an APIClient mock from a cache of the API spec
 
     Parameters
     ----------
-    cache : str, optional
+    api_key : str, optional
+        IGNORED; provided to match signature of the APIClient
+    return_type : str, optional
+        IGNORED; provided to match signature of the APIClient
+    retry_total : int, optional
+        IGNORED; provided to match signature of the APIClient
+    api_version : string, optional
+        Mock this version of the API endpoints.
+    resources : string, optional
+        When set to "base", only the default endpoints will be exposed in the
+        mock object. Set to "all" to include all endpoints available in
+        your API cache, including those that may be in development and subject
+        to breaking changes at a later date.
+    local_api_spec : str, optional
         Location of the API spec on the local filesystem
     reset : bool, optional
         If False, the new mock will share underlying object dictionaries
@@ -82,6 +98,8 @@ def create_client_mock(cache=CACHED_SPEC_PATH, reset=False, setup=True):
     setup : bool, optional
         If True, the returned mock will provide sensible responses
         for many of the mocked endpoint calls.
+    **kwargs:
+        Absorbs additional keyword arguments which
 
     Returns
     -------
@@ -89,11 +107,16 @@ def create_client_mock(cache=CACHED_SPEC_PATH, reset=False, setup=True):
         A `Mock` object which looks like an APIClient and which will
         error if any method calls have non-existent / misspelled parameters
     """
+    if not local_api_spec:
+        raise ValueError("Provide a cache of the API spec when creating "
+                         "a mock for testing.")
+
     # Create a client from the cache. We'll use this for
     # auto-speccing. Prevent it from trying to talk to the real API.
     with mock.patch('requests.Session', mock.MagicMock):
-        real_client = APIClient(local_api_spec=cache, api_key='none',
-                                resources='all')
+        real_client = APIClient(local_api_spec=local_api_spec, api_key='none',
+                                resources=resources, api_version=api_version,
+                                return_type=return_type)
     real_client._feature_flags = {'noflag': None}
     if hasattr(real_client, 'channels'):
         # Deleting "channels" causes the client to fall back on

@@ -1,4 +1,5 @@
-from __future__ import absolute_import
+from __future__ import absolute_import, print_function
+import os
 import logging
 
 from civis.compat import lru_cache
@@ -289,6 +290,17 @@ class APIClient(MetaMixin):
                                                 resources)
         for class_name, cls in classes.items():
             setattr(self, class_name, cls(session, return_type))
+
+    def __new__(cls, *args, **kwargs):
+        """If the API key is "TEST", return a mock instead of a real client"""
+        api_key = args[0] if len(args) > 0 else kwargs.get('api_key')
+        api_key = api_key or os.environ.get("CIVIS_API_KEY", api_key)
+        if api_key == 'TEST':
+            from civis.tests.mocks import create_client_mock
+            print("Creating a mock API client object instead of a real one.")
+            return create_client_mock(*args, **kwargs)
+        else:
+            return super().__new__(cls)
 
     @property
     def feature_flags(self):
