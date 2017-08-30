@@ -105,15 +105,94 @@ _tables_g[200]['columns'] = [
 tables_g = copy.deepcopy(_tables_g)
 tables_l = copy.deepcopy(_tables_l)
 
+run_final_state = 'succeeded'  # Change runs to this status when they complete
+_containers_runs = {1000: Response(
+    {'container_id': 300,
+     'error': None,
+     'finished_at': '2017-08-15T20:39:55.000Z',
+     'id': 1000,
+     'is_cancel_requested': False,
+     'started_at': '2017-08-15T20:38:49.000Z',
+     'state': 'running'})
+}
+_containers_runs_state = {1000: {'final_state': run_final_state,
+                                 'calls_remaining': 2}}
+_containers_runs_outputs = {}
+_containers = {300: Response(
+    {'archived': False,
+     'arguments': {'SPAM': 'eggs'},
+     'cancel_timeout': 0,
+     'category': 'script',
+     'created_at': '2017-08-15T20:38:48.000Z',
+     'docker_command': "python -c \"print(os.environ['SPAM'])\"",
+     'docker_image_name': 'civisanalytics/datascience-python',
+     'docker_image_tag': '3.1.0',
+     'finished_at': '2017-08-15T20:39:55.000Z',
+     'from_template_id': None,
+     'git_credential_id': None,
+     'hidden': False,
+     'id': 300,
+     'is_template': False,
+     'last_run': _containers_runs[1000],
+     'name': 'Spam mockery script',
+     'params': [{'name': 'SPAM', 'required': True}],
+     'projects': [],
+     'published_as_template_id': None,
+     'remote_host_credential_id': None,
+     'repo_http_uri': None,
+     'repo_ref': None,
+     'required_resources': {'cpu': 256, 'diskSpace': 2.0, 'memory': 512},
+     'state': 'succeeded',  # This may be inconsistent with the run.
+     'target_project_id': None,
+     'template_dependents_count': None,
+     'template_script_name': None,
+     'time_zone': 'America/Chicago',
+     'type': 'Container',
+     'updated_at': '2017-08-15T20:38:48.000Z',
+     'user_context': 'runner'
+     })}
+containers = copy.deepcopy(_containers)
+containers_runs = copy.deepcopy(_containers_runs)
+containers_runs_outputs = copy.deepcopy(_containers_runs_outputs)
+c_runs_state = copy.deepcopy(_containers_runs_state)
 
-def _get_resource(res, _id):
-    if _id in res:
-        return res[_id]
+
+def _get_resource(res, id, **filter_args):
+    if id in res and all(res[id][k] == v for k, v in filter_args.items()):
+        return res[id]
     else:
         raise CivisAPIError(Response(
             {'status_code': 404,
              'reason': 'The requested resource could not be found.',
              'content': None}))
+
+
+def _get_cont_run(id, run_id, type='Container'):
+    run = _get_resource(containers_runs, run_id)
+    id_name = '%s_id' % type.lower()
+    cont = _get_resource(containers, run[id_name], type=type)
+    if run[id_name] != id:
+        raise CivisAPIError(Response(
+            {'status_code': 404,
+             'reason': 'The requested resource could not be found.',
+             'content': None}))
+    if c_runs_state[run_id]['calls_remaining'] > 0:
+        c_runs_state[run_id]['calls_remaining'] -= 1
+        if c_runs_state[run_id]['calls_remaining'] <= 0:
+            run['state'] = c_runs_state[run_id]['final_state']
+            run['finished_at'] = datetime.utcnow().isoformat() + "Z"
+            cont['state'] = c_runs_state[run_id]['final_state']
+            cont['finished_at'] = run['finished_at']
+    return run
+
+
+def _post_resource(res, sig, *args, _extra=None, **kwargs):
+    new_id = max(res) + 1
+    obj = sig.bind(*args, **kwargs).arguments
+    obj.update(_extra or {})
+    obj['id'] = new_id
+    res[new_id] = Response(obj)
+    return res[new_id]
 
 
 def _list_resource(res, *args, iterator=False, **kwargs):
@@ -213,6 +292,7 @@ def create_client_mock(api_key=None, return_type='snake',
     mock_client = mock.create_autospec(real_client, spec_set=True)
 
     if setup:
+        _set_scripts(mock_client)
         _set_users(mock_client)
         _set_credentials(mock_client)
         _set_files(mock_client)
@@ -274,6 +354,113 @@ def reset_mock_db():
     global tables_l
     tables_g = copy.deepcopy(_tables_g)
     tables_l = copy.deepcopy(_tables_l)
+
+    global containers
+    global containers_runs
+    global containers_runs_outputs
+    global c_runs_state
+    containers = copy.deepcopy(_containers)
+    containers_runs = copy.deepcopy(_containers_runs)
+    containers_runs_outputs = copy.deepcopy(_containers_runs_outputs)
+    c_runs_state = copy.deepcopy(_containers_runs_state)
+
+
+def _set_scripts(mock_client):
+    """Setup for the `scripts` endpoint
+
+    Mock returns for
+        scripts.get_containers
+        scripts.post_containers
+        scripts.get_containers_runs
+        scripts.post_containers_runs
+        scripts.list_containers_runs
+        scripts.list_containers_runs_outputs
+        scripts.post_containers_runs_outputs
+        scripts.get_sql
+        scripts.post_sql
+        scripts.get_sql_runs
+        scripts.post_sql_runs
+        scripts.list_sql_runs
+        scripts.post_cancel
+    """
+    s = mock_client.scripts
+    s.get_containers.side_effect = partial(_get_resource, containers,
+                                           type='Container')
+    s.get_containers_runs.side_effect = partial(_get_cont_run,
+                                                type='Container')
+    s.post_containers.side_effect = partial(_post_resource, containers,
+                                            s.post_containers._spec_signature,
+                                            _extra={'type': 'Container'})
+
+    def _post_run(id, type='Container'):
+        cont = _get_resource(containers, id, type=type)
+        run = Response(
+            {'container_id': id,
+             'error': None,
+             'finished_at': None,
+             'id': max(containers_runs) + 1,
+             'is_cancel_requested': False,
+             'started_at': datetime.utcnow().isoformat() + "Z",
+             'state': 'running'
+             })
+        cont['state'] = 'running'
+        cont['last_run'] = run
+        c_runs_state[run.id] = {'final_state': run_final_state,
+                                'calls_remaining': 2}
+        containers_runs[run.id] = run
+        return run
+    s.post_containers_runs.side_effect = partial(_post_run, type='Container')
+
+    def _list_runs(id, *args, iterator=False, type='Container', **kwargs):
+        filter_args = {('%s_id' % type.lower()): id}
+        runs = find(containers_runs.values(), **filter_args)
+        if iterator:
+            return _list_iterator(runs)
+        else:
+            return runs
+    s.list_containers_runs.side_effect = partial(_list_runs, type='Container')
+
+    def _post_output(id, run_id, object_type, object_id):
+        _get_cont_run(id, run_id, type='Container')  # Trigger 404s
+        endpoint = object_type.lower() + 's'
+        name = getattr(mock_client, endpoint).get(object_id).name
+        link = 'api.civisanalytics.com/%s/%s' % (endpoint, object_id)
+        output = Response({'object_id': object_id, 'object_type': object_type,
+                           'link': link, 'name': name})
+        containers_runs_outputs.setdefault(run_id, []).append(output)
+        return output
+    s.post_containers_runs_outputs.side_effect = _post_output
+
+    def _list_outputs(id, run_id, *args, iterator=False, **kwargs):
+        mock_client.scripts.get_containers_runs(id, run_id)  # Triggers errors
+        outputs = containers_runs_outputs.setdefault(run_id, [])
+        if iterator:
+            return _list_iterator(outputs)
+        else:
+            return outputs
+    s.list_containers_runs_outputs.side_effect = _list_outputs
+
+    # SQL scripts
+    s.get_sql.side_effect = partial(_get_resource, containers, type='SQL')
+    s.get_sql_runs.side_effect = partial(_get_cont_run, type='SQL')
+    s.post_sql.side_effect = partial(_post_resource, containers,
+                                     s.post_sql._spec_signature,
+                                     _extra={'type': 'SQL'})
+    s.post_sql_runs.side_effect = partial(_post_run, type='SQL')
+    s.list_sql_runs.side_effect = partial(_list_runs, type='SQL')
+
+    def _post_cancel(id):
+        cont = _get_resource(containers, id)
+        run = _get_cont_run(id, cont.get('last_run', {}).get('id'))
+        c_runs_state[run.id]['calls_remaining'] = 0
+        run['state'] = 'cancelled'
+        run['finished_at'] = datetime.utcnow().isoformat() + "Z"
+        run['is_cancel_requested'] = True
+        cont['state'] = 'cancelled'
+        cont['finished_at'] = run['finished_at']
+        return Response({'id': run.id, 'is_cancel_requested': True,
+                         'state': 'cancelled'})
+    s.post_cancel.side_effect = _post_cancel
 
 
 def _set_users(mock_client):
