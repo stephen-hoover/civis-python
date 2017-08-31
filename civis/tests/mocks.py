@@ -11,9 +11,12 @@ can change during testing.
 import copy
 from datetime import datetime, timedelta
 from functools import partial
+import io
+import json
 import os
 
 import dateutil.parser
+from six import BytesIO
 
 from civis import APIClient, find
 from civis.base import CivisAPIError
@@ -307,16 +310,28 @@ def mock_file_to_civis(buf, name, client=None, tempdir=None, **kwargs):
     If `tempdir` is provided, the buffer will be written to a file
     "[name]_[id]" in the temporary directory. Otherwise the buffer
     will be ignored. Either way, you get back the new file ID.
+
+    If `tempdir` is not provided, it will default to the value in
+    the environment variable "CIVIS_TEST_TMPDIR".
     """
     if client is None:
         client = create_client_mock()
     file_response = client.files.post(name, **kwargs)
 
+    tempdir = tempdir or os.environ.get('CIVIS_TEST_TMPDIR', '')
+    file_url = os.path.join(tempdir, "%s_%s" % (name, file_response.id))
+    file_response['file_url'] = file_url
+    file_response.update(
+        {'file_url': file_url,
+         'file_size': 5011,
+         'download_url': _files[100]['download_url'].copy()})
+    file_response = Response(file_response)  # Put new keys in the Response
+    file_response['download_url']['path'] = file_response['file_url']
+    files[file_response.id] = file_response  # Update DB with new response
+
     if tempdir:
-        file_url = os.path.join(tempdir, "%s_%s" % (name, file_response.id))
-        file_response['file_url'] = file_url
         with open(file_url, 'wb') as _fout:
-            _fout.write(buf)
+            _fout.write(buf.read())
 
     return file_response.id
 
@@ -333,6 +348,15 @@ def mock_civis_to_file(file_id, buf, client=None):
     file_response = client.files.get(file_id)
     with open(file_response.file_url, 'rb') as _fin:
         buf.write(_fin.read())
+
+
+def mock_file_to_json(file_id, client=None, **json_kwargs):
+    """Mock version of civis.io.file_to_json"""
+    buf = BytesIO()
+    mock_civis_to_file(file_id, buf, client=client)
+    txt = io.TextIOWrapper(buf, encoding='utf-8')
+    txt.seek(0)
+    return json.load(txt, **json_kwargs)
 
 
 def reset_mock_db():
@@ -532,13 +556,12 @@ def _set_files(mock_client):
                      'policy': 'abc'},
                  'upload_url': 'localhost:65000/upload'}
         stored = reply.copy()
-        stored.update({'download_url': _files[100]['download_url'].copy(),
-                       'file_url': "%s_%s" % (name, new_id),
-                       'file_size': 5011})
-        stored['download_url']['path'] = stored['file_url']
+        stored.update({'download_url': None,
+                       'file_url': None,
+                       'file_size': 0})
         del stored['upload_fields']
         del stored['upload_url']
-        files[new_id] = stored
+        files[new_id] = Response(stored)
 
         return Response(reply)
     mock_client.files.post.side_effect = _post
