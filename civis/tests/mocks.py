@@ -167,7 +167,7 @@ workers_g = copy.deepcopy(_workers_g)
 
 def _get_resource(res, id, **filter_args):
     if id in res and all(res[id][k] == v for k, v in filter_args.items()):
-        return res[id]
+        return copy.deepcopy(res[id])
     else:
         raise CivisAPIError(Response(
             {'status_code': 404,
@@ -191,7 +191,7 @@ def _get_cont_run(id, run_id, type='Container'):
             run['finished_at'] = datetime.utcnow().isoformat() + "Z"
             cont['state'] = c_runs_state[run_id]['final_state']
             cont['finished_at'] = run['finished_at']
-    return run
+    return copy.deepcopy(run)
 
 
 def _post_resource(res, sig, *args, _extra=None, **kwargs):
@@ -200,19 +200,19 @@ def _post_resource(res, sig, *args, _extra=None, **kwargs):
     obj.update(_extra or {})
     obj['id'] = new_id
     res[new_id] = Response(obj)
-    return res[new_id]
+    return copy.deepcopy(res[new_id])
 
 
 def _list_resource(res, *args, iterator=False, **kwargs):
     if iterator:
         return _list_iterator(res.values())
     else:
-        return list(res.values())
+        return copy.deepcopy(list(res.values()))
 
 
 def _list_iterator(res):
     for v in res:
-        yield v
+        yield copy.deepcopy(v)
 
 
 def insert_table(tb):
@@ -491,7 +491,7 @@ def _set_scripts(mock_client):
         c_runs_state[run.id] = {'final_state': run_final_state,
                                 'calls_remaining': 2}
         containers_runs[run.id] = run
-        return run
+        return copy.deepcopy(run)
     s.post_containers_runs.side_effect = partial(_post_run, type='Container')
 
     def _list_runs(id, *args, iterator=False, type='Container', **kwargs):
@@ -500,7 +500,7 @@ def _set_scripts(mock_client):
         if iterator:
             return _list_iterator(runs)
         else:
-            return runs
+            return copy.deepcopy(runs)
     s.list_containers_runs.side_effect = partial(_list_runs, type='Container')
 
     def _post_output(id, run_id, object_type, object_id):
@@ -511,7 +511,7 @@ def _set_scripts(mock_client):
         output = Response({'object_id': object_id, 'object_type': object_type,
                            'link': link, 'name': name})
         containers_runs_outputs.setdefault(run_id, []).append(output)
-        return output
+        return copy.deepcopy(output)
     s.post_containers_runs_outputs.side_effect = _post_output
 
     def _list_outputs(id, run_id, *args, iterator=False, **kwargs):
@@ -520,7 +520,7 @@ def _set_scripts(mock_client):
         if iterator:
             return _list_iterator(outputs)
         else:
-            return outputs
+            return copy.deepcopy(outputs)
     s.list_containers_runs_outputs.side_effect = _list_outputs
 
     # SQL scripts
@@ -583,7 +583,7 @@ def _set_credentials(mock_client):
     mock_client.credentials.list.side_effect = partial(_list_resource, creds)
 
     def get_d():
-        return creds.get(1)
+        return copy.deepcopy(creds.get(1))
     type(mock_client).default_credential = mock.PropertyMock(side_effect=get_d)
 
 
@@ -622,7 +622,7 @@ def _set_files(mock_client):
         del stored['upload_url']
         files[new_id] = Response(stored)
 
-        return Response(reply)
+        return Response(copy.deepcopy(reply))
     mock_client.files.post.side_effect = _post
 
 
@@ -645,7 +645,7 @@ def _set_tables(mock_client):
         if iterator:
             return _list_iterator(cols)
         else:
-            return cols
+            return copy.deepcopy(cols)
     mock_client.tables.list_columns.side_effect = _list_columns
 
     def _patch(id, ontology_mapping=-1, description=-1):
