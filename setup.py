@@ -65,7 +65,9 @@ def main():
             'console_scripts': [
                 'civis = civis.cli.__main__:main',
                 'civis_joblib_worker = civis.run_joblib_func:main',
-            ]
+            ],
+        data_files=[(os.path.join('civis', 'tests', 'civis_api_spec.json'),
+                    ]
         }
     )
 

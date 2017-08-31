@@ -24,6 +24,9 @@ from civis.compat import mock
 from civis.resources import CACHED_SPEC_PATH
 from civis.response import Response
 
+_THIS_DIR = os.path.dirname(os.path.realpath(__file__))
+TEST_SPEC = os.path.join(_THIS_DIR, "civis_api_spec.json")
+
 # Note that the LIST and GET responses are slightly different for /users.
 # For test mocking, it should be okay to use the same thing for each.
 _users = {7: Response({'created_at': '2013-01-20T12:31:17.000Z',
@@ -313,9 +316,8 @@ def create_client_mock(api_key=None, return_type='snake',
         A `Mock` object which looks like an APIClient and which will
         error if any method calls have non-existent / misspelled parameters
     """
-    if not local_api_spec:
-        raise ValueError("Provide a cache of the API spec when creating "
-                         "a mock for testing.")
+    if not local_api_spec or not os.path.exists(local_api_spec):
+        local_api_spec = TEST_SPEC
 
     # Create a client from the cache. We'll use this for
     # auto-speccing. Prevent it from trying to talk to the real API.
