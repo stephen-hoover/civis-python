@@ -159,6 +159,11 @@ containers_runs = copy.deepcopy(_containers_runs)
 containers_runs_outputs = copy.deepcopy(_containers_runs_outputs)
 c_runs_state = copy.deepcopy(_containers_runs_state)
 
+_workers_l = {}
+_workers_g = {}
+workers_l = copy.deepcopy(_workers_l)
+workers_g = copy.deepcopy(_workers_g)
+
 
 def _get_resource(res, id, **filter_args):
     if id in res and all(res[id][k] == v for k, v in filter_args.items()):
@@ -235,6 +240,40 @@ def insert_table(tb):
     tables_l[tb_l['id']] = Response(tb_l)
 
 
+def insert_clusters(**params):
+    """Set cluster info for the mock clients to find
+
+    Use a default cluster definition. Input keyword arguments
+    override defaults.
+    """
+    # Initialize the list response with defaults
+    _id = 1 if not workers_l else max(workers_l) + 1
+    worker = Response({'active_jobs_count': 5,
+                       'id': _id,
+                       'instance_type': 'm4.2xlarge',
+                       'max_instances': 100,
+                       'min_instances': 1,
+                       'queued_jobs_count': 0,
+                       'region': 'us-east-1'})
+
+    # Update the worker with the inputs, but only if they exist already.
+    for k, v in params.items():
+        if k in worker:
+            worker[k] = v
+
+    worker_g = copy.deepcopy(worker)
+    worker_g.update({'instance_max_cpu': 1024,
+                     'instance_max_disk_space': 10.0,
+                     'instance_max_memory': 9000,
+                     'instances': 7})
+    for k, v in params.items():
+        if k in worker_g:
+            worker_g[k] = v
+
+    workers_l[_id] = worker
+    workers_g[_id] = worker_g
+
+
 def create_client_mock(api_key=None, return_type='snake',
                        retry_total=6, api_version="1.0", resources="base",
                        local_api_spec=CACHED_SPEC_PATH,
@@ -295,6 +334,7 @@ def create_client_mock(api_key=None, return_type='snake',
     mock_client = mock.create_autospec(real_client, spec_set=True)
 
     if setup:
+        _set_clusters(mock_client)
         _set_scripts(mock_client)
         _set_users(mock_client)
         _set_credentials(mock_client)
@@ -387,6 +427,25 @@ def reset_mock_db():
     containers_runs = copy.deepcopy(_containers_runs)
     containers_runs_outputs = copy.deepcopy(_containers_runs_outputs)
     c_runs_state = copy.deepcopy(_containers_runs_state)
+
+    global workers_g
+    global workers_l
+    workers_g = copy.deepcopy(_workers_g)
+    workers_l = copy.deepcopy(_workers_l)
+
+
+def _set_clusters(mock_client):
+    """Setup mocks for the `clusters` endpoint
+
+    Mock returns for:
+        clusters.get_workers
+        clusters.list_workers
+    """
+    if not hasattr(mock_client, 'clusters'):
+        return
+    c = mock_client.clusters
+    c.list_workers.side_effect = partial(_list_resource, workers_l)
+    c.get_workers.side_effect = partial(_get_resource, workers_g)
 
 
 def _set_scripts(mock_client):
