@@ -111,7 +111,9 @@ _tables_g[200]['columns'] = [
 tables_g = copy.deepcopy(_tables_g)
 tables_l = copy.deepcopy(_tables_l)
 
-run_final_state = 'succeeded'  # Change runs to this status when they complete
+run_initial_state = 'running'
+run_final_state = 'succeeded'  # Change runs to this state when they complete
+runs_change_state = True  # If True, runs will change state after enough GETs
 _containers_runs = {1000: Response(
     {'container_id': 300,
      'error': None,
@@ -168,9 +170,12 @@ workers_l = copy.deepcopy(_workers_l)
 workers_g = copy.deepcopy(_workers_g)
 
 
-def _get_resource(res, id, **filter_args):
+def _get_resource(res, id, _copy=True, **filter_args):
     if id in res and all(res[id][k] == v for k, v in filter_args.items()):
-        return copy.deepcopy(res[id])
+        obj = res[id]
+        if _copy:
+            obj = copy.deepcopy(obj)
+        return obj
     else:
         raise CivisAPIError(Response(
             {'status_code': 404,
@@ -178,10 +183,17 @@ def _get_resource(res, id, **filter_args):
              'content': None}))
 
 
-def _get_cont_run(id, run_id, type='Container'):
-    run = _get_resource(containers_runs, run_id)
-    id_name = '%s_id' % type.lower()
-    cont = _get_resource(containers, run[id_name], type=type)
+def _get_cont_run(id, run_id, _copy=True, type=None):
+    run = _get_resource(containers_runs, run_id, _copy=False)
+    for k in run:
+        if k.endswith('_id'):
+            # e.g. "container_id", "sql_id"
+            id_name = k
+            break
+    else:
+        raise RuntimeError('Unable to find job from run.')
+    filter_args = {'type': type} if type is not None else {}
+    cont = _get_resource(containers, run[id_name], _copy=False, **filter_args)
     if run[id_name] != id:
         raise CivisAPIError(Response(
             {'status_code': 404,
@@ -189,12 +201,17 @@ def _get_cont_run(id, run_id, type='Container'):
              'content': None}))
     if c_runs_state[run_id]['calls_remaining'] > 0:
         c_runs_state[run_id]['calls_remaining'] -= 1
-        if c_runs_state[run_id]['calls_remaining'] <= 0:
+        if c_runs_state[run_id]['calls_remaining'] == 0:
             run['state'] = c_runs_state[run_id]['final_state']
             run['finished_at'] = datetime.utcnow().isoformat() + "Z"
+            cont['last_run'] = Response(run)
             cont['state'] = c_runs_state[run_id]['final_state']
             cont['finished_at'] = run['finished_at']
-    return copy.deepcopy(run)
+            containers_runs[run.id] = Response(run)
+            containers[cont.id] = Response(cont)
+    if _copy:
+        run = copy.deepcopy(run)
+    return Response(run)
 
 
 def _post_resource(res, sig, *args, _extra=None, **kwargs):
@@ -216,6 +233,36 @@ def _list_resource(res, *args, iterator=False, **kwargs):
 def _list_iterator(res):
     for v in res:
         yield copy.deepcopy(v)
+
+
+def _list_runs(id, *args, iterator=False, type='Container', **kwargs):
+    filter_args = {('%s_id' % type.lower()): id}
+    runs = find(containers_runs.values(), **filter_args)
+    if iterator:
+        return _list_iterator(runs)
+    else:
+        return copy.deepcopy(runs)
+
+
+def _post_run(id, type=None):
+    filter_params = {'type': type} if type is not None else {}
+    cont = _get_resource(containers, id, _copy=False, **filter_params)
+    run = Response(
+        {'container_id': id,
+         'error': None,
+         'finished_at': None,
+         'id': max(containers_runs) + 1,
+         'is_cancel_requested': False,
+         'started_at': datetime.utcnow().isoformat() + "Z",
+         'state': run_initial_state
+         })
+    cont['state'] = run_initial_state
+    cont['last_run'] = run
+    c_runs_state[run.id] = {'final_state': run_final_state,
+                            'calls_remaining': 2 if runs_change_state else -1}
+    containers_runs[run.id] = run
+    containers[cont.id] = Response(cont)
+    return copy.deepcopy(run)
 
 
 def insert_table(tb):
@@ -338,6 +385,7 @@ def create_client_mock(api_key=None, return_type='snake',
     if setup:
         _set_clusters(mock_client)
         _set_scripts(mock_client)
+        _set_jobs(mock_client)
         _set_users(mock_client)
         _set_credentials(mock_client)
         _set_files(mock_client)
@@ -430,6 +478,13 @@ def reset_mock_db():
     containers_runs_outputs = copy.deepcopy(_containers_runs_outputs)
     c_runs_state = copy.deepcopy(_containers_runs_state)
 
+    global run_initial_state
+    global run_final_state
+    global runs_change_state
+    run_initial_state = 'running'
+    run_final_state = 'succeeded'
+    runs_change_state = True
+
     global workers_g
     global workers_l
     workers_g = copy.deepcopy(_workers_g)
@@ -456,6 +511,7 @@ def _set_scripts(mock_client):
     Mock returns for
         scripts.get_containers
         scripts.post_containers
+        scripts.post_custom
         scripts.get_containers_runs
         scripts.post_containers_runs
         scripts.list_containers_runs
@@ -476,34 +532,12 @@ def _set_scripts(mock_client):
     s.post_containers.side_effect = partial(_post_resource, containers,
                                             s.post_containers._spec_signature,
                                             _extra={'type': 'Container'})
-
-    def _post_run(id, type='Container'):
-        cont = _get_resource(containers, id, type=type)
-        run = Response(
-            {'container_id': id,
-             'error': None,
-             'finished_at': None,
-             'id': max(containers_runs) + 1,
-             'is_cancel_requested': False,
-             'started_at': datetime.utcnow().isoformat() + "Z",
-             'state': 'running'
-             })
-        cont['state'] = 'running'
-        cont['last_run'] = run
-        c_runs_state[run.id] = {'final_state': run_final_state,
-                                'calls_remaining': 2}
-        containers_runs[run.id] = run
-        return copy.deepcopy(run)
     s.post_containers_runs.side_effect = partial(_post_run, type='Container')
-
-    def _list_runs(id, *args, iterator=False, type='Container', **kwargs):
-        filter_args = {('%s_id' % type.lower()): id}
-        runs = find(containers_runs.values(), **filter_args)
-        if iterator:
-            return _list_iterator(runs)
-        else:
-            return copy.deepcopy(runs)
     s.list_containers_runs.side_effect = partial(_list_runs, type='Container')
+
+    s.post_custom.side_effect = partial(_post_resource, containers,
+                                        s.post_custom._spec_signature,
+                                        _extra={'type': 'Container'})
 
     def _post_output(id, run_id, object_type, object_id):
         _get_cont_run(id, run_id, type='Container')  # Trigger 404s
@@ -535,7 +569,7 @@ def _set_scripts(mock_client):
     s.list_sql_runs.side_effect = partial(_list_runs, type='SQL')
 
     def _post_cancel(id):
-        cont = _get_resource(containers, id)
+        cont = _get_resource(containers, id, _copy=False)
         run = _get_cont_run(id, cont.get('last_run', {}).get('id'))
         c_runs_state[run.id]['calls_remaining'] = 0
         run['state'] = 'cancelled'
@@ -543,9 +577,36 @@ def _set_scripts(mock_client):
         run['is_cancel_requested'] = True
         cont['state'] = 'cancelled'
         cont['finished_at'] = run['finished_at']
+        containers_runs[run.id] = Response(run)
+        containers[cont.id] = Response(cont)
         return Response({'id': run.id, 'is_cancel_requested': True,
                          'state': 'cancelled'})
     s.post_cancel.side_effect = _post_cancel
+
+
+def _set_jobs(mock_client):
+    """Setup for the `jobs` endpoint
+
+    Mock returns for
+        jobs.get
+        jobs.get_runs
+        jobs.post_runs
+    """
+    if not hasattr(mock_client, 'jobs'):
+        return
+
+    def _get_job(id):
+        job = _get_resource(containers, id)
+        runs = _list_runs(id, type=job.type)
+        for k in list(job.keys()):
+            if k not in ['id', 'name', 'type', 'state', 'created_at',
+                         'updated_at', 'last_run', 'hidden', 'archived']:
+                del job[k]
+        job['runs'] = runs
+        return Response(job)
+    mock_client.jobs.get.side_effect = _get_job
+    mock_client.jobs.get_runs.side_effect = _get_cont_run
+    mock_client.jobs.post_runs.side_effect = _post_run
 
 
 def _set_users(mock_client):
