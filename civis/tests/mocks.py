@@ -171,6 +171,7 @@ workers_g = copy.deepcopy(_workers_g)
 
 
 def _get_resource(res, id, _copy=True, **filter_args):
+    id = int(id)
     if id in res and all(res[id][k] == v for k, v in filter_args.items()):
         obj = res[id]
         if _copy:
@@ -184,6 +185,7 @@ def _get_resource(res, id, _copy=True, **filter_args):
 
 
 def _get_cont_run(id, run_id, _copy=True, type=None):
+    id, run_id = int(id), int(run_id)
     run = _get_resource(containers_runs, run_id, _copy=False)
     for k in run:
         if k.endswith('_id'):
@@ -236,6 +238,7 @@ def _list_iterator(res):
 
 
 def _list_runs(id, *args, iterator=False, type='Container', **kwargs):
+    id = int(id)
     filter_args = {('%s_id' % type.lower()): id}
     runs = find(containers_runs.values(), **filter_args)
     if iterator:
@@ -245,6 +248,7 @@ def _list_runs(id, *args, iterator=False, type='Container', **kwargs):
 
 
 def _post_run(id, type=None):
+    id = int(id)
     filter_params = {'type': type} if type is not None else {}
     cont = _get_resource(containers, id, _copy=False, **filter_params)
     run = Response(
@@ -540,6 +544,7 @@ def _set_scripts(mock_client):
                                         _extra={'type': 'Container'})
 
     def _post_output(id, run_id, object_type, object_id):
+        id, run_id = int(id), int(run_id)
         _get_cont_run(id, run_id, type='Container')  # Trigger 404s
         endpoint = object_type.lower() + 's'
         name = getattr(mock_client, endpoint).get(object_id).name
@@ -551,6 +556,7 @@ def _set_scripts(mock_client):
     s.post_containers_runs_outputs.side_effect = _post_output
 
     def _list_outputs(id, run_id, *args, iterator=False, **kwargs):
+        id, run_id = int(id), int(run_id)
         mock_client.scripts.get_containers_runs(id, run_id)  # Triggers errors
         outputs = containers_runs_outputs.setdefault(run_id, [])
         if iterator:
@@ -569,6 +575,7 @@ def _set_scripts(mock_client):
     s.list_sql_runs.side_effect = partial(_list_runs, type='SQL')
 
     def _post_cancel(id):
+        id = int(id)
         cont = _get_resource(containers, id, _copy=False)
         run = _get_cont_run(id, cont.get('last_run', {}).get('id'))
         c_runs_state[run.id]['calls_remaining'] = 0
@@ -596,6 +603,7 @@ def _set_jobs(mock_client):
         return
 
     def _get_job(id):
+        id = int(id)
         job = _get_resource(containers, id)
         runs = _list_runs(id, type=job.type)
         for k in list(job.keys()):
