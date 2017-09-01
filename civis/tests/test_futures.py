@@ -16,7 +16,8 @@ from civis.futures import (ContainerFuture,
 from civis.futures import (CivisFuture,
                            JobCompleteListener,
                            _LONG_POLLING_INTERVAL)
-from civis.tests import TEST_SPEC
+from civis.tests import TEST_SPEC, mocks
+
 from pubnub.enums import PNStatusCategory
 
 from civis.tests.testcase import CivisVCRTestCase
@@ -240,42 +241,53 @@ class CivisFutureTests(CivisVCRTestCase):
         clear_lru_cache()
 
 
-def _check_executor(from_template_id=None):
-    job_id, run_id = 42, 43
-    c = _setup_client_mock(job_id, run_id, n_failures=0)
-    mock_run = c.scripts.post_containers_runs()
+def _submit_job(mock_client, from_template_id):
     if from_template_id:
         bpe = CustomScriptExecutor(from_template_id=from_template_id,
-                                   client=c, polling_interval=0.01)
+                                   client=mock_client, polling_interval=0.01)
         future = bpe.submit(my_param='spam')
     else:
-        bpe = _ContainerShellExecutor(client=c, polling_interval=0.01)
+        bpe = _ContainerShellExecutor(client=mock_client,
+                                      polling_interval=0.01)
         future = bpe.submit("foo")
 
+    return future, bpe
+
+
+def _check_executor(from_template_id=None):
+    c = mocks.create_client_mock(reset=True)
+    mocks.runs_change_state = False  # Manually control state changes
+
     # Mock and test running, future.job_id, and done()
-    mock_run.state = "running"
+    future, _ = _submit_job(c, from_template_id)
     assert future.running(), "future is incorrectly marked as not running"
-    assert future.job_id == job_id, "job_id not stored properly"
+    assert future.job_id, "job_id must exist"
     assert not future.done(), "future is incorrectly marked as done"
 
+    # Test ability to cancel a future
+    future, _ = _submit_job(c, from_template_id)
     future.cancel()
-
-    # Mock and test cancelled()
     assert future.cancelled(), "cancelled() did not return True as expected"
     assert not future.running(), "running() did not return False as expected"
 
     # Mock and test done()
-    mock_run.state = "succeeded"
+    mocks.run_initial_state = "succeeded"
+    future, _ = _submit_job(c, from_template_id)
+    future.result()
     assert future.done(), "done() did not return True as expected"
-
-    # Test cancelling all jobs.
-    mock_run.state = "running"
-    bpe.cancel_all()
-    assert future.cancelled(), "cancel_all() failed"
+    assert not future.cancelled()
 
     # Test shutdown method.
+    mocks.run_initial_state = "succeeded"
+    future, bpe = _submit_job(c, from_template_id)
     bpe.shutdown(wait=True)
     assert future.done(), "shutdown() failed"
+
+    # Test cancelling all jobs.
+    mocks.run_initial_state = "running"
+    future, bpe = _submit_job(c, from_template_id)
+    bpe.cancel_all()
+    assert future.cancelled(), "cancel_all() failed"
 
     return c
 
@@ -337,58 +349,13 @@ def _make_error_func(num_failures, failure_is_error=False):
     return mock_api_error
 
 
-def _setup_client_mock(job_id=-10, run_id=100, n_failures=8,
-                       failure_is_error=False):
-    """Return a Mock set up for use in testing container scripts
-
-    Parameters
-    ----------
-    job_id: int
-        Mock-create containers with this ID when calling `post_containers`
-        or `post_containers_runs`.
-    run_id: int
-        Mock-create runs with this ID when calling `post_containers_runs`.
-    n_failures: int
-        When calling `get_containers_runs`, fail this many times
-        before succeeding.
-    failure_is_error: bool
-        If True, "failure" means raising a `CivisAPIError`.
-
-    Returns
-    -------
-    `unittest.mock.Mock`
-        With `post_containers`, `post_containers_runs`, and
-        `get_containers_runs` methods set up.
-    """
-    c = mock.Mock()
-    c.__class__ = APIClient
-
-    mock_container = response.Response({'id': job_id})
-    c.scripts.post_containers.return_value = mock_container
-    c.scripts.post_custom.return_value = mock_container
-    mock_container_run = response.Response({'id': run_id,
-                                            'container_id': job_id,
-                                            'state': 'queued'})
-    c.scripts.post_containers_runs.return_value = mock_container_run
-    c.jobs.post_runs.return_value = mock_container_run
-    c.scripts.get_containers_runs.side_effect = _make_error_func(
-        n_failures, failure_is_error)
-
-    def change_state_to_cancelled(job_id):
-        mock_container_run.state = "cancelled"
-        return mock_container_run
-
-    c.scripts.post_cancel.side_effect = change_state_to_cancelled
-    del c.channels  # Remove "channels" endpoint to fall back on polling
-
-    return c
-
-
 def test_future_no_retry_error():
     # Verify that with no retries, exceptions on job polling
     #  are raised to the user
-    c = _setup_client_mock(failure_is_error=True)
-    fut = ContainerFuture(-10, 100, polling_interval=0.001, client=c)
+    c = mocks.create_client_mock(reset=True)
+
+    # Poll a non-existent run.
+    fut = ContainerFuture(300, 2000, polling_interval=0.001, client=c)
     with pytest.raises(CivisAPIError):
         fut.result()
 
@@ -396,8 +363,9 @@ def test_future_no_retry_error():
 def test_future_no_retry_failure():
     # Verify that with no retries, job failures are raised as
     # exceptions for the user
-    c = _setup_client_mock(failure_is_error=False)
-    fut = ContainerFuture(-10, 100, polling_interval=0.001, client=c)
+    c = mocks.create_client_mock(reset=True)
+    mocks.c_runs_state[1000]['final_state'] = "failed"
+    fut = ContainerFuture(300, 1000, polling_interval=0.001, client=c)
     with pytest.raises(CivisJobFailure):
         fut.result()
 
@@ -405,8 +373,9 @@ def test_future_no_retry_failure():
 def test_future_not_enough_retry_error():
     # Verify that if polling the run is still erroring after all retries
     # are exhausted, the error will be raised for the user.
-    c = _setup_client_mock(failure_is_error=True)
-    fut = ContainerFuture(-10, 100, max_n_retries=3, polling_interval=0.01,
+    c = mocks.create_client_mock(reset=True)
+    c.scripts.get_containers_runs.side_effect = _make_error_func(8, True)
+    fut = ContainerFuture(300, 1000, max_n_retries=3, polling_interval=0.01,
                           client=c)
     with pytest.raises(CivisAPIError):
         fut.result()
@@ -415,8 +384,9 @@ def test_future_not_enough_retry_error():
 def test_future_not_enough_retry_failure():
     # Verify that if the job is still failing after all retries
     # are exhausted, the job failure will be raised for the user.
-    c = _setup_client_mock(failure_is_error=False)
-    fut = ContainerFuture(-10, 100, max_n_retries=3, polling_interval=0.01,
+    c = mocks.create_client_mock(reset=True)
+    c.scripts.get_containers_runs.side_effect = _make_error_func(8, False)
+    fut = ContainerFuture(300, 1000, max_n_retries=3, polling_interval=0.01,
                           client=c)
     with pytest.raises(CivisJobFailure):
         fut.result()
@@ -424,15 +394,17 @@ def test_future_not_enough_retry_failure():
 
 def test_future_retry_failure():
     # Verify that we can retry through API errors until a job succeeds
-    c = _setup_client_mock(failure_is_error=False)
-    fut = ContainerFuture(-10, 100, max_n_retries=10, polling_interval=0.01,
+    c = mocks.create_client_mock(reset=True)
+    c.scripts.get_containers_runs.side_effect = _make_error_func(4, False)
+    fut = ContainerFuture(300, 1000, max_n_retries=6, polling_interval=0.01,
                           client=c)
     assert fut.result().state == 'succeeded'
 
 
 def test_future_retry_error():
     # Verify that we can retry through job failures until it succeeds
-    c = _setup_client_mock(failure_is_error=True)
-    fut = ContainerFuture(-10, 100, max_n_retries=10, polling_interval=0.01,
+    c = mocks.create_client_mock(reset=True)
+    c.scripts.get_containers_runs.side_effect = _make_error_func(4, True)
+    fut = ContainerFuture(300, 1000, max_n_retries=6, polling_interval=0.01,
                           client=c)
     assert fut.result().state == 'succeeded'
