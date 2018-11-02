@@ -3,6 +3,7 @@ from builtins import super
 
 import time
 import threading
+import warnings
 
 from civis.base import CivisJobFailure, CivisAsyncResultBase, FAILED, DONE
 from civis.response import Response
@@ -38,7 +39,11 @@ class _ResultPollingThread(threading.Thread):
         """Poll until done.
         """
         while not self.finished.wait(self.polling_interval):
-            if self.poller(*self.poller_args).state in DONE:
+            resp = self.poller(*self.poller_args)
+            if resp is None:
+                warnings.warn('Received None response from the API!')
+                continue
+            if resp.state in DONE:
                 self.finished.set()
 
 
